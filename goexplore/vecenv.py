@@ -57,6 +57,30 @@ class MockVecEnv:
         pass
 
 
+def _resolve_backend(pv, name: str):
+    """Pick a backend class that actually exists in this PufferLib version.
+
+    Backend names have drifted across releases (and ``Native`` doesn't exist
+    everywhere), so we try a fallback chain per friendly name and NEVER return
+    None -- passing None to ``vector.make`` is what raised 'NoneType is not
+    callable'.
+    """
+    chains = {
+        "native": ["Native", "PufferEnv", "Multiprocessing", "Serial"],
+        "multiprocessing": ["Multiprocessing", "Serial"],
+        "serial": ["Serial"],
+    }.get(name, ["Serial"])
+    for attr in chains:
+        cls = getattr(pv, attr, None)
+        if cls is not None:
+            return cls
+    available = [a for a in dir(pv) if a[:1].isupper()]
+    raise RuntimeError(
+        f"No usable PufferLib vector backend for {name!r}. "
+        f"Available in pufferlib.vector: {available}"
+    )
+
+
 class PufferVecEnv:
     """Adapter onto PufferLib's native vectorized NLE env.
 
@@ -66,7 +90,7 @@ class PufferVecEnv:
     """
 
     def __init__(self, num_envs: int, env_id: str = "NetHackChallenge-v0",
-                 backend: str = "native", **kwargs):
+                 backend: str = "serial", num_workers: int | None = None, **kwargs):
         import pufferlib
         import pufferlib.vector
 
@@ -78,19 +102,22 @@ class PufferVecEnv:
                 "pufferlib version's environment API."
             ) from exc
 
-        # Native (C) backend is the high-throughput path for this fork.
-        backend_cls = {
-            "native": getattr(pufferlib.vector, "Native", None),
-            "multiprocessing": pufferlib.vector.Multiprocessing,
-            "serial": pufferlib.vector.Serial,
-        }.get(backend, pufferlib.vector.Serial)
+        backend_cls = _resolve_backend(pufferlib.vector, backend)
 
-        self.vecenv = pufferlib.vector.make(
-            env_creator,
+        make_kwargs = dict(
             num_envs=num_envs,
             backend=backend_cls,
             env_kwargs={"name": env_id, **kwargs},
         )
+        # Multiprocessing needs workers and requires num_envs % num_workers == 0.
+        if backend_cls is getattr(pufferlib.vector, "Multiprocessing", object()):
+            import os
+            num_workers = num_workers or min(num_envs, os.cpu_count() or 1)
+            while num_workers > 1 and num_envs % num_workers:
+                num_workers -= 1
+            make_kwargs["num_workers"] = num_workers
+
+        self.vecenv = pufferlib.vector.make(env_creator, **make_kwargs)
         self.num_envs = num_envs
         self.n_actions = int(self.vecenv.single_action_space.n)
 
