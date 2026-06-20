@@ -104,11 +104,16 @@ class PufferVecEnv:
 
         backend_cls = _resolve_backend(pufferlib.vector, backend)
 
-        make_kwargs = dict(
-            num_envs=num_envs,
-            backend=backend_cls,
-            env_kwargs={"name": env_id, **kwargs},
-        )
+        # pufferlib.environments.nethack.env_creator is a FACTORY: calling it
+        # returns the actual env-constructing callable (a functools.partial).
+        # vector.make wants THAT callable, not the factory -- passing the factory
+        # leaves pufferlib's driver_env a partial (-> 'no attribute num_agents').
+        try:
+            creator = env_creator(name=env_id)
+        except TypeError:
+            creator = env_creator()
+
+        make_kwargs = dict(num_envs=num_envs, backend=backend_cls)
         # Multiprocessing needs workers and requires num_envs % num_workers == 0.
         if backend_cls is getattr(pufferlib.vector, "Multiprocessing", object()):
             import os
@@ -117,7 +122,7 @@ class PufferVecEnv:
                 num_workers -= 1
             make_kwargs["num_workers"] = num_workers
 
-        self.vecenv = pufferlib.vector.make(env_creator, **make_kwargs)
+        self.vecenv = pufferlib.vector.make(creator, **make_kwargs)
         self.num_envs = num_envs
         self.n_actions = int(self.vecenv.single_action_space.n)
 
