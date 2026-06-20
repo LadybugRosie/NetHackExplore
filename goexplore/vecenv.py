@@ -1,0 +1,156 @@
+"""Vectorized environment layer for Go-Explore.
+
+Go-Explore needs three operations from a batch of envs:
+
+  * ``reset(seed)``                -> reset ALL lanes to the fixed game seed
+  * ``step(actions)``              -> step all lanes with one batched action array
+  * ``reset_lanes(indices, seed)`` -> reset SOME lanes back to the seed (used when
+                                      a lane retires and we re-home it to replay a
+                                      new cell from the root)
+
+``reset_lanes`` is the one operation a stock RL vecenv does NOT expose -- normal
+vecenvs autoreset on episode end with whatever seeding policy they were built
+with. Go-Explore's replay-based return *requires* re-homing a chosen lane to the
+exact game seed on demand, so we make it a first-class method here.
+
+``MockVecEnv`` is a fully-working synchronous implementation used to test the
+async-lane driver offline. It loops in Python -- it makes NO throughput claim;
+its only job is to validate the algorithm. ``PufferVecEnv`` is the real adapter:
+it delegates ``step`` to PufferLib's native batched C step (where the throughput
+actually lives) and documents the per-lane re-seed integration point.
+"""
+
+from __future__ import annotations
+
+
+class MockVecEnv:
+    """N independent MockNLE games stepped synchronously (test scaffolding)."""
+
+    def __init__(self, num_envs: int, width: int = 5):
+        from .mock_nle import MockNLE
+        self.num_envs = num_envs
+        self.envs = [MockNLE(width=width) for _ in range(num_envs)]
+        self.n_actions = self.envs[0].action_space.n
+
+    def reset(self, seed: int):
+        out = []
+        for e in self.envs:
+            e.seed(seed)
+            out.append(e.reset())
+        return out
+
+    def step(self, actions):
+        obs, rew, done, info = [], [], [], []
+        for e, a in zip(self.envs, actions):
+            o, r, d, i = e.step(a)
+            obs.append(o); rew.append(r); done.append(d); info.append(i)
+        return obs, rew, done, info
+
+    def reset_lanes(self, indices, seed: int):
+        fresh = {}
+        for i in indices:
+            self.envs[i].seed(seed)
+            fresh[i] = self.envs[i].reset()
+        return fresh
+
+    def close(self):
+        pass
+
+
+class PufferVecEnv:
+    """Adapter onto PufferLib's native vectorized NLE env.
+
+    The batched ``step`` is where this fork's C throughput is realized: one call
+    advances all lanes in native code. The exact construction + obs format are
+    version-specific, so the version-sensitive bits are isolated here.
+    """
+
+    def __init__(self, num_envs: int, env_id: str = "NetHackChallenge-v0",
+                 backend: str = "native", **kwargs):
+        import pufferlib
+        import pufferlib.vector
+
+        try:
+            from pufferlib.environments.nethack import env_creator
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                "Could not import PufferLib's NetHack env_creator; check your "
+                "pufferlib version's environment API."
+            ) from exc
+
+        # Native (C) backend is the high-throughput path for this fork.
+        backend_cls = {
+            "native": getattr(pufferlib.vector, "Native", None),
+            "multiprocessing": pufferlib.vector.Multiprocessing,
+            "serial": pufferlib.vector.Serial,
+        }.get(backend, pufferlib.vector.Serial)
+
+        self.vecenv = pufferlib.vector.make(
+            env_creator,
+            num_envs=num_envs,
+            backend=backend_cls,
+            env_kwargs={"name": env_id, **kwargs},
+        )
+        self.num_envs = num_envs
+        self.n_actions = int(self.vecenv.single_action_space.n)
+
+    # PufferLib returns stacked/structured arrays; split them into per-lane dicts
+    # so the rest of Go-Explore (cells.py) can index obs["blstats"] uniformly.
+    def _split(self, batched_obs):
+        out = []
+        for i in range(self.num_envs):
+            out.append({k: v[i] for k, v in batched_obs.items()}
+                       if isinstance(batched_obs, dict)
+                       else {"blstats": batched_obs[i]})
+        return out
+
+    def reset(self, seed: int):
+        self._seed_all(seed)
+        obs, _info = self.vecenv.reset(seed=seed)
+        return self._split(obs)
+
+    def step(self, actions):
+        obs, rew, term, trunc, info = self.vecenv.step(actions)  # batched native step
+        done = [bool(a or b) for a, b in zip(term, trunc)]
+        return self._split(obs), list(rew), done, info
+
+    def reset_lanes(self, indices, seed: int):
+        # INTEGRATION POINT: PufferLib autoresets a lane on done; to make
+        # replay-based return exact we must re-home the lane to *this* seed.
+        # Depending on version this is done via per-env seeding before the
+        # autoreset, or by an async send/recv to the worker. The robust,
+        # version-independent alternative is C-level snapshot/restore
+        # (nle_clone/nle_restore) -- see README "next steps". For now we
+        # re-seed and pull a fresh observation for the requested lanes.
+        self._seed_lanes(indices, seed)
+        obs, _info = self.vecenv.reset(seed=seed)  # TODO: per-lane reset, not full
+        split = self._split(obs)
+        return {i: split[i] for i in indices}
+
+    def _seed_all(self, seed):
+        self._seed_lanes(range(self.num_envs), seed)
+
+    def _seed_lanes(self, indices, seed):
+        # Best-effort: the underlying NLE env exposes seed(core, disp, reseed).
+        envs = getattr(self.vecenv, "envs", None)
+        if envs is None:
+            return
+        for i in indices:
+            target = getattr(envs[i], "unwrapped", envs[i])
+            seed_fn = getattr(target, "seed", None)
+            if seed_fn is not None:
+                try:
+                    seed_fn(seed, seed, False)
+                except TypeError:
+                    pass
+
+    def close(self):
+        self.vecenv.close()
+
+
+def make_vecenv(kind: str = "mock", num_envs: int = 64, env_id: str | None = None, **kwargs):
+    if kind == "mock":
+        return MockVecEnv(num_envs, **kwargs)
+    if kind in ("nle", "puffer"):
+        return PufferVecEnv(num_envs, env_id=env_id or "NetHackChallenge-v0", **kwargs)
+    raise ValueError(f"unknown vecenv kind: {kind!r}")

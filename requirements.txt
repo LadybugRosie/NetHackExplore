@@ -1,0 +1,8 @@
+# Phase 1 (exploration) needs NOTHING beyond the Python stdlib when using --env mock.
+#
+# For the real environment (Python 3.9-3.11 recommended; NLE/PufferLib do not yet
+# build on 3.12+):
+nle>=0.9.0
+pufferlib
+torch        # only needed for phase-2 robustification (--robustify)
+# gymnasium  # or `gym`; DeterministicEnv supports either
