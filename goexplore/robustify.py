@@ -124,7 +124,9 @@ def bc_pretrain(env, archive, *, epochs: int = 300, top_k: int = 32,
 # --------------------------------------------------------------------------- #
 def ppo_finetune(*, env_id: str = "NetHackChallenge-v0", num_envs: int = 256,
                  total_timesteps: int = 10_000_000, bc_checkpoint: str | None = None,
-                 backend: str = "native", **train_kwargs):
+                 backend: str = "native", wandb: bool = False,
+                 wandb_project: str = "nethack-goexplore", wandb_entity=None,
+                 **train_kwargs):
     """Fine-tune with PufferLib's native PPO, initialized from BC weights.
 
     This is the step that uses the C-native vectorized throughput: PufferLib
@@ -156,12 +158,17 @@ def ppo_finetune(*, env_id: str = "NetHackChallenge-v0", num_envs: int = 256,
     # Hand off to PufferLib's native PPO. Newer PufferLib exposes this as
     # ``pufferlib.pufferl`` (a.k.a. clean_pufferl). Pin the exact symbol to your
     # installed version; both common entry points are tried below.
+    # PufferLib's native trainer has its OWN wandb integration; enabling it via
+    # the config makes phase 2b log SPS / episodic return / losses to wandb
+    # automatically (as a separate run from phase 1).
+    ppo_config = _default_ppo_config(total_timesteps, num_envs, **train_kwargs)
+    if wandb:
+        ppo_config.update(track=True, wandb_project=wandb_project,
+                          wandb_entity=wandb_entity, wandb_group="phase2-ppo")
+
     try:
         from pufferlib import pufferl
-        trainer = pufferl.PuffeRL(
-            config=_default_ppo_config(total_timesteps, num_envs, **train_kwargs),
-            vecenv=vec.vecenv, policy=policy,
-        )
+        trainer = pufferl.PuffeRL(config=ppo_config, vecenv=vec.vecenv, policy=policy)
         trainer.train()
         return trainer
     except (ImportError, AttributeError):
@@ -200,12 +207,14 @@ def _default_ppo_config(total_timesteps, num_envs, **overrides):
 def robustify(env, archive, *, use_glyph_policy: bool = False,
               bc_checkpoint: str = "bc_init.pt", run_ppo: bool = False,
               env_id: str = "NetHackChallenge-v0", num_envs: int = 256,
-              total_timesteps: int = 10_000_000):
+              total_timesteps: int = 10_000_000, wandb: bool = False,
+              wandb_project: str = "nethack-goexplore", wandb_entity=None):
     """Run phase 2a (BC) and optionally phase 2b (PufferLib PPO)."""
     net = bc_pretrain(env, archive, use_glyph_policy=use_glyph_policy,
                       checkpoint=bc_checkpoint if use_glyph_policy else None)
     if run_ppo:
         return ppo_finetune(env_id=env_id, num_envs=num_envs,
                             total_timesteps=total_timesteps,
-                            bc_checkpoint=bc_checkpoint)
+                            bc_checkpoint=bc_checkpoint, wandb=wandb,
+                            wandb_project=wandb_project, wandb_entity=wandb_entity)
     return net

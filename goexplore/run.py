@@ -49,10 +49,21 @@ def build_parser():
     p.add_argument("--ppo-envs", type=int, default=256)
     p.add_argument("--ppo-timesteps", type=int, default=10_000_000)
     p.add_argument("--out", default=None, help="write best trajectory + stats to this JSON file")
+    # wandb tracking
+    p.add_argument("--wandb", action="store_true", help="log progress to Weights & Biases")
+    p.add_argument("--wandb-project", default="nethack-goexplore")
+    p.add_argument("--wandb-entity", default=None)
+    p.add_argument("--wandb-name", default=None, help="run name (defaults to wandb auto)")
     return p
 
 
 def _run_phase1(args, cell_cfg):
+    from .tracking import make_logger
+    logger = make_logger(
+        args.wandb, project=args.wandb_project, entity=args.wandb_entity,
+        name=args.wandb_name, group="phase1",
+        config={k: getattr(args, k) for k in vars(args)},
+    )
     if args.vectorized:
         vec = make_vecenv(args.env, num_envs=args.num_envs, env_id=args.env_id)
         cfg = VecGoExploreConfig(
@@ -64,7 +75,7 @@ def _run_phase1(args, cell_cfg):
             game_seed=args.seed_core,
             log_every=args.log_every if args.log_every is not None else 20_000,
         )
-        ge = VectorizedGoExplore(vec, cell_cfg, cfg)
+        ge = VectorizedGoExplore(vec, cell_cfg, cfg, logger=logger)
     else:
         raw = make_env(args.env, env_id=args.env_id)
         env = DeterministicEnv(raw, seed_core=args.seed_core, seed_disp=args.seed_disp)
@@ -75,7 +86,7 @@ def _run_phase1(args, cell_cfg):
             search_seed=args.search_seed,
             log_every=args.log_every if args.log_every is not None else 100,
         )
-        ge = GoExplore(env, cell_cfg, cfg)
+        ge = GoExplore(env, cell_cfg, cfg, logger=logger)
     return ge, ge.run()
 
 
@@ -117,6 +128,9 @@ def main(argv=None):
             env_id=args.env_id,
             num_envs=args.ppo_envs,
             total_timesteps=args.ppo_timesteps,
+            wandb=args.wandb,
+            wandb_project=args.wandb_project,
+            wandb_entity=args.wandb_entity,
         )
 
     return ge

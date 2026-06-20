@@ -41,7 +41,7 @@ class VecGoExploreConfig:
 
 
 class VectorizedGoExplore:
-    def __init__(self, vec, cell_cfg: CellConfig, cfg: VecGoExploreConfig):
+    def __init__(self, vec, cell_cfg: CellConfig, cfg: VecGoExploreConfig, logger=None):
         self.vec = vec
         self.cell_cfg = cell_cfg
         self.cfg = cfg
@@ -51,6 +51,10 @@ class VectorizedGoExplore:
                          for i in range(vec.num_envs)]
         self.stats = Stats()
         self.rounds = 0
+        if logger is None:
+            from .tracking import NullLogger
+            logger = NullLogger()
+        self.logger = logger
 
     def _cell(self, obs):
         return cell_descriptor(obs, self.cell_cfg)
@@ -139,8 +143,16 @@ class VectorizedGoExplore:
                     f"cells={len(self.archive):>6} max_depth={self.archive.max_depth:>2} "
                     f"best_score={self.stats.best_score:>6} ({sps:,.0f}/s)"
                 )
+                self.logger.log({
+                    "phase1/cells": len(self.archive),
+                    "phase1/max_depth": self.archive.max_depth,
+                    "phase1/best_score": self.stats.best_score,
+                    "phase1/rounds": self.rounds,
+                    "phase1/sps": sps,
+                }, step=env_steps)
                 next_log += self.cfg.log_every
 
+        self.logger.finish()
         return self.stats
 
     def best_trajectory(self):

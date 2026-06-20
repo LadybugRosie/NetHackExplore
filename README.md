@@ -98,6 +98,31 @@ and commented): the PufferLib **vecenv construction + per-lane re-seed** in
 `vecenv.py::PufferVecEnv`, and the PufferLib **PPO trainer entry point** in
 `robustify.py::ppo_finetune` (tries `pufferlib.pufferl` then `clean_pufferl`).
 
+## Tracking with Weights & Biases
+
+```bash
+pip install wandb && wandb login        # one-time
+
+# Phase 1: logs cells / max_depth / best_score / rounds / SPS vs env-steps
+python3 -m goexplore.run --env mock --vectorized --max-env-steps 200000 \
+        --wandb --wandb-project nethack-goexplore --wandb-name ge-mock-1
+
+# Phase 1 + Phase 2: phase-1 metrics logged here; PufferLib's PPO logs its OWN
+# wandb run (SPS / episodic return / losses) for phase 2b.
+python3 -m goexplore.run --env puffer --vectorized --max-env-steps 50000000 \
+        --robustify --run-ppo --wandb --wandb-project nethack-goexplore
+```
+
+Notes:
+* `--wandb` is opt-in; without it (or if `wandb` isn't installed) the run prints
+  to stdout and continues — tracking never crashes a run.
+* You get **two wandb runs** for a full pipeline: phase 1 (logged by
+  `goexplore/tracking.py`) and phase 2b PPO (logged by PufferLib's native wandb
+  integration, which `ppo_finetune` switches on via `track=True`). Group them
+  with `--wandb-project`, or filter by the `phase1` / `phase2-ppo` group tags.
+* Phase-1 metrics are logged against `env_steps` as the x-axis, so the
+  exploration curve is comparable across `--num-envs` settings.
+
 ## Tuning knobs that matter
 
 * `--cell-w/--cell-h` — cell granularity. Coarser = smaller archive, faster but

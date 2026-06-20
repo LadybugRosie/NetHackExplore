@@ -41,13 +41,18 @@ class Stats:
 
 
 class GoExplore:
-    def __init__(self, env: DeterministicEnv, cell_cfg: CellConfig, cfg: GoExploreConfig):
+    def __init__(self, env: DeterministicEnv, cell_cfg: CellConfig, cfg: GoExploreConfig,
+                 logger=None):
         self.env = env
         self.cell_cfg = cell_cfg
         self.cfg = cfg
         self.rng = random.Random(cfg.search_seed)
         self.archive = Archive(rng=random.Random(cfg.search_seed + 1))
         self.stats = Stats()
+        if logger is None:
+            from .tracking import NullLogger
+            logger = NullLogger()
+        self.logger = logger
 
     def _cell(self, obs):
         return cell_descriptor(obs, self.cell_cfg)
@@ -103,6 +108,14 @@ class GoExplore:
                     f"best_score={self.stats.best_score:>6} "
                     f"env_steps={self.stats.env_steps:>9} ({sps:,.0f}/s)"
                 )
+                self.logger.log({
+                    "phase1/cells": len(self.archive),
+                    "phase1/max_depth": self.archive.max_depth,
+                    "phase1/best_score": self.stats.best_score,
+                    "phase1/rounds": it,
+                    "phase1/sps": sps,
+                }, step=self.stats.env_steps)
+        self.logger.finish()
         return self.stats
 
     def best_trajectory(self):
