@@ -191,9 +191,66 @@ class PufferVecEnv:
         self.vecenv.close()
 
 
+class GymnasiumVecEnv:
+    """N real NLE gymnasium envs stepped in a Python loop.
+
+    Bypasses PufferLib's nethack wrapper (which uses legacy gym) so this works
+    with modern gymnasium-based nle (1.x). Observations stay as dicts -- no
+    PufferLib flattening -- so ``cell_descriptor`` reads ``blstats``/``glyphs``
+    directly.
+
+    TRADEOFF: this loops in Python, so it does NOT get the fork's C-native batched
+    throughput. Use it to run Go-Explore on *real* NetHack and validate the
+    algorithm; use ``PufferVecEnv`` (with a version-aligned install) for the
+    high-throughput native path.
+
+    DETERMINISM: replay-based return needs the game to be a pure function of
+    (seed, actions). We seed every reset with the same game seed; on nle 1.x
+    verify this reproduces (the engine must be in reseed=False mode), e.g. with
+    the same exact-replay check used in tests/test_vectorized.py.
+    """
+
+    def __init__(self, num_envs: int, env_id: str = "NetHackScore-v0", **kwargs):
+        import gymnasium
+        import nle  # noqa: F401 - registers NetHack* ids into gymnasium
+
+        self.envs = [gymnasium.make(env_id, **kwargs) for _ in range(num_envs)]
+        self.num_envs = num_envs
+        self.n_actions = int(self.envs[0].action_space.n)
+
+    def reset(self, seed: int):
+        out = []
+        for e in self.envs:
+            obs, _info = e.reset(seed=seed)
+            out.append(obs)
+        return out
+
+    def step(self, actions):
+        obs, rew, done, info = [], [], [], []
+        for e, a in zip(self.envs, actions):
+            o, r, term, trunc, i = e.step(int(a))
+            obs.append(o); rew.append(r); done.append(bool(term or trunc)); info.append(i)
+        return obs, rew, done, info
+
+    def reset_lanes(self, indices, seed: int):
+        fresh = {}
+        for i in indices:
+            obs, _info = self.envs[i].reset(seed=seed)
+            fresh[i] = obs
+        return fresh
+
+    def close(self):
+        for e in self.envs:
+            e.close()
+
+
 def make_vecenv(kind: str = "mock", num_envs: int = 64, env_id: str | None = None, **kwargs):
     if kind == "mock":
         return MockVecEnv(num_envs, **kwargs)
-    if kind in ("nle", "puffer"):
+    if kind == "nle":
+        # Direct gymnasium NLE (works with pip-installed nle 1.x); Python-loop.
+        return GymnasiumVecEnv(num_envs, env_id=env_id or "NetHackScore-v0", **kwargs)
+    if kind == "puffer":
+        # Native PufferLib path; needs a version-aligned (fork) nle + matching gym.
         return PufferVecEnv(num_envs, env_id=env_id or "NetHackChallenge-v0", **kwargs)
     raise ValueError(f"unknown vecenv kind: {kind!r}")
