@@ -94,6 +94,17 @@ class PufferVecEnv:
         import pufferlib
         import pufferlib.vector
 
+        # Importing nle is what registers the NetHack* gym ids (NetHackChallenge-v0,
+        # NetHackScore-v0, ...). PufferLib's environment.py calls gym.make(name)
+        # but doesn't import nle itself, so without this the id "doesn't exist".
+        try:
+            import nle  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError(
+                "nle is not importable -- install the NetHack env (the fork's "
+                "build) so the NetHack* gym ids get registered."
+            ) from exc
+
         try:
             from pufferlib.environments.nethack import env_creator
         except Exception as exc:  # noqa: BLE001
