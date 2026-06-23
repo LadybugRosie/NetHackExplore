@@ -29,6 +29,7 @@
 #define NETHACK_USE_BLSTATS 1
 #define NETHACK_USE_GLYPHS  1
 #define NETHACK_USE_CHARS   1
+#define NETHACK_USE_MESSAGE 1   /* needed for wiki/Motif-style message rewards */
 
 #include "nethack.h"   /* pulls in nleobs.h, profile.h; defines Nethack, init/c_reset/c_step */
 #include <stdint.h>
@@ -120,6 +121,9 @@ float          ge_reward(GeEnv *g)    { return g->env.rewards[0]; }
 int            ge_done(GeEnv *g)      { return g->env.terminals[0] > 0.5f; }
 unsigned char *ge_chars(GeEnv *g)     { return g->env.chars; }
 short         *ge_glyphs(GeEnv *g)    { return g->env.glyphs; }
+/* The current message line (NLE_MESSAGE_SIZE bytes, NUL-terminated). */
+unsigned char *ge_message(GeEnv *g)   { return g->env.message; }
+int            ge_message_len(void)   { return NLE_MESSAGE_SIZE; }
 
 void ge_free(GeEnv *g) {
     if (!g) return;

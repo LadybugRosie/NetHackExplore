@@ -27,6 +27,7 @@ import os
 NH_ROWS, NH_COLS = 21, 79
 NH_GRID = NH_ROWS * NH_COLS  # 1659
 BLSTATS_LEN = 27
+MESSAGE_LEN = 256
 
 _DEFAULT_LIB = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "native", "libge_nethack.so")
@@ -69,6 +70,8 @@ def _load(lib_path: str | None = None):
     lib.ge_chars.restype = ctypes.POINTER(ctypes.c_ubyte)
     lib.ge_glyphs.argtypes = [ctypes.c_void_p]
     lib.ge_glyphs.restype = ctypes.POINTER(ctypes.c_short)
+    lib.ge_message.argtypes = [ctypes.c_void_p]
+    lib.ge_message.restype = ctypes.POINTER(ctypes.c_ubyte)
     lib.ge_free.argtypes = [ctypes.c_void_p]
     _lib = lib
     return lib
@@ -88,7 +91,7 @@ class NativeNLE:
 
     def __init__(self, core: int = 0x111, disp: int = 0x222,
                  include_glyphs: bool = False, include_chars: bool = False,
-                 lib_path: str | None = None):
+                 include_message: bool = False, lib_path: str | None = None):
         self._lib = _load(lib_path)
         self._core = int(core)
         self._disp = int(disp)
@@ -97,6 +100,8 @@ class NativeNLE:
         # (chars-only) training observation, so BC demos collected here transfer
         # directly to a `puffer train` policy.
         self.include_chars = include_chars
+        # message is the top status line as a decoded str (for wiki/Motif rewards).
+        self.include_message = include_message
         self.action_space = _Discrete(self._lib.ge_num_actions())
         self._h = self._lib.ge_make(ctypes.c_ulong(self._core), ctypes.c_ulong(self._disp))
         if not self._h:
@@ -121,6 +126,10 @@ class NativeNLE:
         if self.include_chars:
             ch_ptr = self._lib.ge_chars(self._h)
             obs["chars"] = bytes(ch_ptr[:NH_GRID])  # 1659 bytes, matches puffer obs
+        if self.include_message:
+            m_ptr = self._lib.ge_message(self._h)
+            raw = bytes(m_ptr[:MESSAGE_LEN])
+            obs["message"] = raw.split(b"\x00", 1)[0].decode("latin1")
         return obs
 
     def reset(self):
