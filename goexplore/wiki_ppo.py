@@ -38,6 +38,8 @@ def enable(coef: float | None = None, threshold: float | None = None,
     coef = float(os.environ.get("GE_WIKI_COEF", 0.5 if coef is None else coef))
     threshold = float(os.environ.get("GE_WIKI_THRESHOLD", 0.20 if threshold is None else threshold))
     data_base_path = os.environ.get("GE_WIKI_DATABASE", data_base_path)
+    subset = os.environ.get("GE_WIKI_SUBSET", "all")        # "all" | "progression"
+    analyzer = os.environ.get("GE_WIKI_ANALYZER", "word")    # "word" | "char"
 
     Profile = T.Profile
     sample_logits = T.sample_logits
@@ -46,11 +48,13 @@ def enable(coef: float | None = None, threshold: float | None = None,
     def rollouts(self):
         # Lazy one-time setup (PuffeRL.__init__ doesn't know about us).
         if not hasattr(self, "_wiki"):
-            self._wiki = WikiReward(threshold=threshold, data_base_path=data_base_path)
+            self._wiki = WikiReward(threshold=threshold, data_base_path=data_base_path,
+                                    subset=subset, analyzer=analyzer)
             self._wiki_coef = coef
             self._wiki_msg_off = int(self.vec_obs.shape[1]) - MESSAGE_LEN
             self._wiki_disc = [set() for _ in range(self.total_agents)]
             print(f"[wiki-ppo] enabled: coef={coef} threshold={threshold} "
+                  f"subset={subset} analyzer={analyzer} "
                   f"concepts={len(self._wiki.corpus)} msg_off={self._wiki_msg_off}")
 
         prof = self.profile

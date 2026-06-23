@@ -34,8 +34,40 @@ _DEFAULT_DATA_BASE = os.path.join(
     "vendor", "nle", "src", "dat", "data.base",
 )
 
+# Progression-focused subset: concepts that mark *descent / milestones* rather
+# than every monster/item. Matched as substrings against an entry's keys. The
+# aim is a reward that pulls the agent DOWN the dungeon and toward goal states,
+# instead of rewarding breadth on the current level (every newt). Game messages
+# that name these ("There is a staircase down here.", "You see an altar.", "You
+# enter the Gnomish Mines.", "You begin praying...") match these entries.
+PROGRESSION_KEYWORDS = (
+    # descent & dungeon features
+    "stair", "ladder", "trap door", "trapdoor", "hole", "portal", "dungeon",
+    "fountain", "throne", "sink", "grave", "altar", "temple",
+    # branches / special levels
+    "mine", "sokoban", "oracle", "big room", "quest", "ludios", "castle",
+    "valley", "gehennom", "elemental", "astral", "plane", "moloch",
+    # milestone items
+    "amulet of yendor", "bell of opening", "candelabrum", "book of the dead",
+    "luckstone", "invocation",
+    # gate monsters
+    "medusa", "vlad", "wizard of yendor", "high priest", "priest",
+    "death", "pestilence", "famine", "nemesis",
+    # progress actions
+    "pray", "sacrifice",
+)
 
-def load_corpus(data_base_path: str | None = None):
+
+def _is_progression(keys) -> bool:
+    for k in keys:
+        kl = k.lower()
+        for kw in PROGRESSION_KEYWORDS:
+            if kw in kl:
+                return True
+    return False
+
+
+def load_corpus(data_base_path: str | None = None, subset: str = "all"):
     """Parse NetHack's ``data.base`` into a list of concept entries.
 
     Format: comment lines start with '#'; one or more key lines (not indented)
@@ -59,6 +91,8 @@ def load_corpus(data_base_path: str | None = None):
             if name:
                 clean_keys = [k.replace("*", "").strip() for k in keys
                               if not k.startswith("~") and k.strip()]
+                if subset == "progression" and not _is_progression(clean_keys):
+                    return
                 entries.append({
                     "name": name,
                     "keys": clean_keys,
@@ -89,16 +123,23 @@ class WikiReward:
     """
 
     def __init__(self, corpus=None, *, threshold: float = 0.20, bonus: float = 1.0,
-                 backend: str = "tfidf", model: str = "BAAI/bge-small-en-v1.5",
-                 data_base_path: str | None = None):
-        self.corpus = corpus if corpus is not None else load_corpus(data_base_path)
+                 backend: str = "tfidf", analyzer: str = "word",
+                 model: str = "BAAI/bge-small-en-v1.5",
+                 data_base_path: str | None = None, subset: str = "all"):
+        self.corpus = corpus if corpus is not None else load_corpus(data_base_path, subset=subset)
         self.threshold = threshold
         self.bonus = bonus
         self.backend = backend
         docs = [f"{c['name']} {' '.join(c['keys'])} {c['text']}" for c in self.corpus]
         if backend == "tfidf":
             from sklearn.feature_extraction.text import TfidfVectorizer
-            self._vec = TfidfVectorizer(stop_words="english", max_df=0.5, min_df=1)
+            if analyzer == "char":
+                # char n-grams are robust to NetHack's morphology (staircase~stair,
+                # praying~pray, Mines~mine) — important for the small progression
+                # corpus where exact word tokens often miss.
+                self._vec = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), min_df=1)
+            else:
+                self._vec = TfidfVectorizer(stop_words="english", max_df=0.5, min_df=1)
             self._mat = self._vec.fit_transform(docs)  # rows l2-normalized
         elif backend == "st":
             from sentence_transformers import SentenceTransformer

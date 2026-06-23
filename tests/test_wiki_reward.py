@@ -54,6 +54,25 @@ def test_novelty_first_encounter_only():
     print("ok: per-episode first-encounter novelty")
 
 
+def test_progression_subset_char():
+    """Progression subset + char-ngram analyzer matches descent/milestone
+    messages (robust to morphology) and rejects ordinary entity messages."""
+    prog = load_corpus(subset="progression")
+    assert 10 < len(prog) < 60, f"progression corpus size off: {len(prog)}"
+    wr = WikiReward(subset="progression", analyzer="char", threshold=0.17)
+    for msg, concept in [("There is a staircase down here.", "stair"),
+                         ("You enter the Gnomish Mines.", "mine"),
+                         ("You begin praying to Moloch.", "pray"),
+                         ("Welcome to the Oracle.", "oracle")]:
+        sim, name = wr.score(msg)
+        assert sim >= wr.threshold and name == concept, \
+            f"{msg!r} -> ({name}, {sim:.2f}), expected {concept}"
+    for msg in ("You kill the newt!", "You see here an orcish dagger."):
+        sim, _ = wr.score(msg)
+        assert sim < wr.threshold, f"{msg!r} false-matched at {sim:.2f}"
+    print(f"ok: progression subset ({len(prog)} concepts) + char matching")
+
+
 if __name__ == "__main__":
     if not _available():
         print(f"SKIP: {_DEFAULT_DATA_BASE} not found (build the fork / set PUFFERLIB_DIR)")
@@ -61,4 +80,5 @@ if __name__ == "__main__":
     test_corpus_loads()
     test_matching_quality()
     test_novelty_first_encounter_only()
+    test_progression_subset_char()
     print("\nALL WIKI REWARD TESTS PASSED")
