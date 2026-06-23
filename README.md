@@ -128,6 +128,37 @@ Notes / current limits (see "Known limitations" below):
   fine-tune does the real learning. Stronger transfer wants an action prior in
   phase 1 or a self-imitation/backward algorithm in phase 2.
 
+## Wiki-grounded intrinsic reward (experimental, Motif-flavored)
+
+Vanilla GE explores randomly, so its trajectories don't behaviorally-clone well
+in NLE's huge action space. An alternative to BC is a **knowledge-distilled
+exploration reward**: reward the agent for reaching states the game's own
+encyclopedia (`dat/data.base`, the source the wiki is built from) describes —
+i.e. for encountering new monsters/items/features. It's the semantic-space analog
+of the env's per-tile `scout` bonus.
+
+```bash
+source scripts/env.sh
+python tests/test_wiki_reward.py            # corpus + matching + novelty
+python tests/test_wiki_ppo.py              # decode/patch/injection logic (no GPU)
+
+# Train PPO with the wiki reward added (torch backend; launch when GPUs free):
+scripts/train_wiki.sh --vec.total-agents 2048 --train.gpus 1 \
+    --train.total-timesteps 200000000 --wandb --wandb-project nethack-goexplore
+# tune: GE_WIKI_COEF (default 0.5), GE_WIKI_THRESHOLD (0.20)
+```
+
+How it works: `goexplore/wiki_reward.py` matches each step's NLE `message` to the
+nearest encyclopedia concept (TF-IDF cosine, or a sentence-embedding backend) and
+grants a per-episode first-encounter bonus. `goexplore/wiki_ppo.py` monkeypatches
+PufferLib's torch rollout to add that bonus to the env reward before GAE (CPU,
+~15 ms/step for 4096 lanes — no extra GPU load), reusing all of `puffer train`'s
+wandb/dashboard/checkpoint machinery. The principled upgrade to full **Motif** is
+a reward model trained from LLM/wiki *preferences* over message pairs — same
+`WikiReward.score` plug point. (nethackwiki.com is Cloudflare-blocked from this
+host; `data.base` is the local, license-clean stand-in and the corpus is
+swappable for a wiki dump.)
+
 ## Tracking with Weights & Biases
 
 ```bash
