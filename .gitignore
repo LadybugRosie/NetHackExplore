@@ -1,0 +1,15 @@
+# Build artifacts
+goexplore/native/*.so
+goexplore/native/*.o
+
+# Python
+__pycache__/
+*.pyc
+
+# Training / experiment outputs
+*.pt
+*.bin
+wandb/
+checkpoints/
+logs/
+*.json

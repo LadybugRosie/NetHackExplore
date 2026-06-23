@@ -51,6 +51,8 @@ def _map_hash(obs) -> int:
     glyphs = obs.get("glyphs")
     if glyphs is None:
         return 0
+    if isinstance(glyphs, (bytes, bytearray)):  # native env: raw glyph bytes
+        return hash(bytes(glyphs))
     tobytes = getattr(glyphs, "tobytes", None)
     if tobytes is not None:  # numpy array
         return hash(tobytes())

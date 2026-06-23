@@ -88,6 +88,12 @@ def make_env(kind: str = "mock", env_id: str = "NetHackScore-v0", **kwargs):
 
         return MockNLE(**kwargs)
 
+    if kind == "native":
+        # Real deterministic NetHack via libge_nethack.so (the fast fork).
+        from .native_env import NativeNLE
+
+        return NativeNLE(**kwargs)
+
     if kind == "nle":
         import nle  # noqa: F401  (registers gym ids)
 

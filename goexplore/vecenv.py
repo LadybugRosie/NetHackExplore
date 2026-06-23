@@ -247,6 +247,10 @@ class GymnasiumVecEnv:
 def make_vecenv(kind: str = "mock", num_envs: int = 64, env_id: str | None = None, **kwargs):
     if kind == "mock":
         return MockVecEnv(num_envs, **kwargs)
+    if kind == "native":
+        # Real deterministic NetHack (libge_nethack.so), N lanes in one process.
+        from .native_env import NativeVecEnv
+        return NativeVecEnv(num_envs, **kwargs)
     if kind == "nle":
         # Direct gymnasium NLE (works with pip-installed nle 1.x); Python-loop.
         return GymnasiumVecEnv(num_envs, env_id=env_id or "NetHackScore-v0", **kwargs)

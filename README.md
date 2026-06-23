@@ -36,14 +36,22 @@ replay into O(1) — a natural next step, see below.)
 | `goexplore/archive.py` | the cell archive + novelty/frontier-weighted selection |
 | `goexplore/env.py` | `DeterministicEnv` (single-env seed + replay return) and `make_env` |
 | `goexplore/goexplore.py` | the single-env phase-1 return-then-explore loop |
-| `goexplore/vecenv.py` | `MockVecEnv` (testable) + `PufferVecEnv` (native batched step) |
+| `goexplore/vecenv.py` | `MockVecEnv` + `NativeVecEnv` (real engine) + legacy `PufferVecEnv` |
 | `goexplore/vectorized.py` | **vectorized async-lane phase-1 driver** |
-| `goexplore/policy.py` | NetHack actor-critic shared by BC and PPO (lazy torch) |
-| `goexplore/robustify.py` | phase-2: `bc_pretrain` (2a) + `ppo_finetune` via PufferLib PPO (2b) |
+| `goexplore/native/ge_nethack.c` | C shim: deterministic (fixed-seed) wrapper around PufferLib's Ocean NetHack env |
+| `goexplore/native/build_ge.sh` | builds `libge_nethack.so` against `libnethack.so` |
+| `goexplore/native_env.py` | ctypes `NativeNLE` / `NativeVecEnv` — the real deterministic engine |
+| `goexplore/robustify_native.py` | **phase-2 (real)**: BC into PufferLib's policy + `puffer train` PPO fine-tune |
+| `goexplore/policy.py` | (legacy mock/standalone) actor-critic for BC |
+| `goexplore/robustify.py` | (legacy) phase-2 for the mock path |
 | `goexplore/mock_nle.py` | deterministic NLE stand-in for offline testing |
 | `goexplore/run.py` | CLI entry point |
+| `scripts/build_native.sh` | one-shot build of the whole native stack |
+| `scripts/env.sh` | source for NETHACKDIR / LD_LIBRARY_PATH / venv |
+| `scripts/train.sh` | wrapper for native `puffer train nethack` |
 | `tests/test_smoke.py` | single-env algorithm test (beats random baseline) |
 | `tests/test_vectorized.py` | vectorized driver test (deep, reproducible, exact replay) |
+| `tests/test_native.py` | real-engine determinism + a real-NetHack GE run |
 
 ## How the vectorized phase 1 uses the C throughput
 
@@ -76,27 +84,49 @@ Expected: Go-Explore digs far deeper than an equal-budget random rollout (e.g.
 `max_depth=12` vs a random baseline of `~7`), and the vectorized driver matches
 the single-env archive quality.
 
-## Run it on the real environment
+## Run it on the real environment (`--env native`)
 
-Requires a Python the stack supports (currently **3.9–3.11**; this box has 3.14,
-which `nle`/`pufferlib` don't build against yet) and the env installed:
+The real stack is **PufferLib 4.0** (Ocean C-binding env) + the
+[liujonathan24/NetHack](https://github.com/liujonathan24/NetHack) fork, built
+into `libnethack.so` + `pufferlib/_C.so`. Go-Explore drives the engine through a
+tiny deterministic C shim, `libge_nethack.so` (`goexplore/native/ge_nethack.c`),
+loaded via ctypes — **not** the old `--env puffer` path (which targeted a
+PufferLib API that no longer exists). The shim reuses PufferLib's Ocean env but
+swaps in a **fixed-seed reset** (the stock env advances its seed every reset),
+which is what makes replay-based "return" exact.
+
+Build everything (Debian 12 + NVIDIA driver + passwordless sudo assumed):
 
 ```bash
-pip install nle pufferlib torch        # builds libnethack.so from the C fork
-
-# Phase 1, vectorized across 256 native lanes:
-python3 -m goexplore.run --env puffer --vectorized --num-envs 256 \
-        --max-env-steps 50000000 --env-id NetHackChallenge-v0
-
-# Phase 1 + Phase 2 (BC init -> PufferLib native PPO fine-tune):
-python3 -m goexplore.run --env puffer --vectorized --robustify --run-ppo \
-        --ppo-envs 256 --ppo-timesteps 50000000
+scripts/build_native.sh          # apt deps, CUDA toolkit, clone, libnethack.so,
+                                 # _C.so (float32), libge_nethack.so
+source scripts/env.sh            # NETHACKDIR, LD_LIBRARY_PATH, venv
+python tests/test_native.py      # determinism + a real-NetHack GE run
 ```
 
-Two integration points to confirm against your installed versions (both isolated
-and commented): the PufferLib **vecenv construction + per-lane re-seed** in
-`vecenv.py::PufferVecEnv`, and the PufferLib **PPO trainer entry point** in
-`robustify.py::ppo_finetune` (tries `pufferlib.pufferl` then `clean_pufferl`).
+Then:
+
+```bash
+# Phase 1, vectorized Go-Explore on the real deterministic engine:
+python3 -m goexplore.run --env native --vectorized --num-envs 64 \
+        --max-env-steps 2000000
+
+# Phase 1 + Phase 2 (BC warm-start -> PufferLib PPO fine-tune):
+python3 -m goexplore.run --env native --vectorized --robustify --run-ppo \
+        --ppo-envs 4096 --ppo-timesteps 1000000000 --wandb
+
+# Native PPO training directly (no Go-Explore search; uses the env's built-in
+# depth/scout/score reward shaping — the fast path on the H100s):
+scripts/train.sh --wandb --vec.total-agents 4096 --train.gpus 1
+```
+
+Notes / current limits (see "Known limitations" below):
+* The vecenv steps N lanes in one Python process. For more throughput run several
+  across processes (the engine is per-env; each `ge_step` re-anchors its ctx).
+* BC clones the archive's best trajectories, but vanilla Go-Explore explores
+  **randomly**, so BC accuracy is modest — it's a stable warm-start; the PPO
+  fine-tune does the real learning. Stronger transfer wants an action prior in
+  phase 1 or a self-imitation/backward algorithm in phase 2.
 
 ## Tracking with Weights & Biases
 

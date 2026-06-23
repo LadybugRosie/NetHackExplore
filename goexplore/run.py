@@ -26,7 +26,7 @@ from .vectorized import VecGoExploreConfig, VectorizedGoExplore
 
 def build_parser():
     p = argparse.ArgumentParser(description="Go-Explore for NLE / PufferLib")
-    p.add_argument("--env", default="mock", choices=["mock", "nle", "puffer"])
+    p.add_argument("--env", default="mock", choices=["mock", "native", "nle", "puffer"])
     p.add_argument("--env-id", default="NetHackChallenge-v0")
     p.add_argument("--seed-core", type=int, default=0, help="NLE CORE game seed (shared by all lanes)")
     p.add_argument("--seed-disp", type=int, default=0, help="NLE display rng seed")
@@ -64,8 +64,10 @@ def _run_phase1(args, cell_cfg):
         name=args.wandb_name, group="phase1",
         config={k: getattr(args, k) for k in vars(args)},
     )
+    # The native env only materializes glyphs (for map-hash cells) on request.
+    native_kwargs = {"include_glyphs": cell_cfg.use_map_hash} if args.env == "native" else {}
     if args.vectorized:
-        vec = make_vecenv(args.env, num_envs=args.num_envs, env_id=args.env_id)
+        vec = make_vecenv(args.env, num_envs=args.num_envs, env_id=args.env_id, **native_kwargs)
         cfg = VecGoExploreConfig(
             num_envs=args.num_envs,
             max_env_steps=args.max_env_steps,
@@ -77,7 +79,7 @@ def _run_phase1(args, cell_cfg):
         )
         ge = VectorizedGoExplore(vec, cell_cfg, cfg, logger=logger)
     else:
-        raw = make_env(args.env, env_id=args.env_id)
+        raw = make_env(args.env, env_id=args.env_id, **native_kwargs)
         env = DeterministicEnv(raw, seed_core=args.seed_core, seed_disp=args.seed_disp)
         cfg = GoExploreConfig(
             iterations=args.iterations,
@@ -116,22 +118,36 @@ def main(argv=None):
         print(f"wrote {args.out}")
 
     if args.robustify:
-        from .robustify import robustify
-        # BC demos are replayed on a single deterministic env, seeded to match
-        # the search so the stored trajectories reproduce exactly.
-        demo_env = DeterministicEnv(make_env(args.env, env_id=args.env_id),
-                                    seed_core=args.seed_core, seed_disp=args.seed_disp)
-        robustify(
-            demo_env, ge.archive,
-            use_glyph_policy=(args.env != "mock"),
-            run_ppo=args.run_ppo,
-            env_id=args.env_id,
-            num_envs=args.ppo_envs,
-            total_timesteps=args.ppo_timesteps,
-            wandb=args.wandb,
-            wandb_project=args.wandb_project,
-            wandb_entity=args.wandb_entity,
-        )
+        if args.env == "native":
+            # Real engine: BC the archive into PufferLib's policy, then PPO
+            # fine-tune via `puffer train` (see robustify_native).
+            from .robustify_native import robustify_native
+            robustify_native(
+                ge.archive,
+                game_seed=args.seed_core, disp=args.seed_disp,
+                run_ppo=args.run_ppo,
+                total_timesteps=args.ppo_timesteps,
+                total_agents=args.ppo_envs,
+                wandb=args.wandb,
+                wandb_project=args.wandb_project,
+            )
+        else:
+            from .robustify import robustify
+            # BC demos are replayed on a single deterministic env, seeded to match
+            # the search so the stored trajectories reproduce exactly.
+            demo_env = DeterministicEnv(make_env(args.env, env_id=args.env_id),
+                                        seed_core=args.seed_core, seed_disp=args.seed_disp)
+            robustify(
+                demo_env, ge.archive,
+                use_glyph_policy=(args.env != "mock"),
+                run_ppo=args.run_ppo,
+                env_id=args.env_id,
+                num_envs=args.ppo_envs,
+                total_timesteps=args.ppo_timesteps,
+                wandb=args.wandb,
+                wandb_project=args.wandb_project,
+                wandb_entity=args.wandb_entity,
+            )
 
     return ge
 

@@ -1,8 +1,12 @@
-# Phase 1 (exploration) needs NOTHING beyond the Python stdlib when using --env mock.
+# Phase 1 (exploration) on the MOCK env needs NOTHING beyond the Python stdlib
+# (python3 -m goexplore.run --env mock ...).
 #
-# For the real environment (Python 3.9-3.11 recommended; NLE/PufferLib do not yet
-# build on 3.12+):
-nle>=0.9.0
-pufferlib
-torch        # only needed for phase-2 robustification (--robustify)
-# gymnasium  # or `gym`; DeterministicEnv supports either
+# The REAL engine (--env native) + training is NOT a pip install. It builds
+# PufferLib 4.0 (Ocean) + the liujonathan24/NetHack fork from source. Use:
+#
+#     scripts/build_native.sh      # apt deps, CUDA toolkit, clone, build everything
+#     source scripts/env.sh        # NETHACKDIR / LD_LIBRARY_PATH / venv
+#
+# That installs (into PufferLib's venv): torch>=2.9 (cuda), numpy, wandb, pybind11,
+# etc. — see PufferLib's pyproject.toml. There is no `pip install nle`; the fork
+# is a pure-C engine linked into libnethack.so / pufferlib/_C.so.
